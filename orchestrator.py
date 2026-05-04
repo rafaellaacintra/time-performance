@@ -7,18 +7,21 @@ from agents import (
     MarketingHead,
     EcommerceAnalyst,
 )
+from tools import notion_send_report
 
 
 class Orchestrator:
     """
     Coordinates the multi-agent workflow for a daily performance review.
 
-    daily_report() runs a structured pipeline:
-      1. Environmental + Media + RevOps analyses (independent, can be read sequentially)
-      2. Creative analysis (uses media context)
-      3. E-commerce analysis (independent)
-      4. Marketing Head validation of the combined media plan
-      5. Execution of approved actions by Media Analyst
+    daily_report() pipeline:
+      1. Environmental, Media, RevOps analyses
+      2. Creative analysis
+      3. E-commerce analysis
+      4. Marketing Head validates the media plan
+      5. Execute approved actions (if plan is approved)
+
+    Each step's output is sent to Notion automatically if configured.
     """
 
     def __init__(self):
@@ -31,40 +34,37 @@ class Orchestrator:
         self.ecommerce = EcommerceAnalyst(self.client)
 
     def daily_report(self, category: str = "", period: str = "morning") -> dict:
-        """
-        Run the full daily performance workflow.
-
-        Returns a dict with each agent's output and the final execution result.
-        """
+        """Run the full daily performance workflow."""
         print("\n" + "=" * 60)
         print("RELATÓRIO DIÁRIO — TIME DE PERFORMANCE")
         print("=" * 60)
 
-        # Phase 1: Independent analyses
-        print("\n[1/5] Análise Ambiental...")
+        print("\n[1/6] Análise Ambiental...")
         env_report = self.environmental.analyze(category=category)
         _print_section("ANÁLISE AMBIENTAL", env_report)
+        _notion("environmental", env_report, "generated", period)
 
-        print("\n[2/5] Análise de Mídia...")
+        print("\n[2/6] Análise de Mídia...")
         media_plan = self.media.analyze(period=period)
         _print_section("ANÁLISE DE MÍDIA", media_plan)
+        _notion("media", media_plan, "pending_approval", period)
 
-        print("\n[3/5] Análise RevOps...")
+        print("\n[3/6] Análise RevOps...")
         revops_report = self.revops.analyze()
         _print_section("ANÁLISE REVOPS", revops_report)
+        _notion("revops", revops_report, "generated", period)
 
-        # Phase 2: Creative analysis with media context
-        print("\n[3/5] Análise Criativa...")
+        print("\n[4/6] Análise Criativa...")
         creative_report = self.creative.analyze()
         _print_section("ANÁLISE CRIATIVA", creative_report)
+        _notion("creative", creative_report, "pending_approval", period)
 
-        # Phase 3: E-commerce analysis
-        print("\n[4/5] Análise de E-commerce...")
+        print("\n[5/6] Análise de E-commerce...")
         ecommerce_report = self.ecommerce.analyze()
         _print_section("ANÁLISE DE E-COMMERCE", ecommerce_report)
+        _notion("ecommerce", ecommerce_report, "generated", period)
 
-        # Phase 4: Marketing Head validates the media plan
-        print("\n[5/5] Validação pelo Head de Marketing...")
+        print("\n[6/6] Validação pelo Head de Marketing...")
         combined_context = (
             f"ANÁLISE AMBIENTAL:\n{env_report}\n\n"
             f"ANÁLISE REVOPS:\n{revops_report}\n\n"
@@ -73,15 +73,20 @@ class Orchestrator:
         validation = self.head.validate(plan=media_plan, context=combined_context)
         _print_section("VALIDAÇÃO DO HEAD DE MARKETING", validation)
 
-        # Phase 5: Execute approved actions
         execution_result = ""
         if _plan_approved(validation):
+            validation_status = "approved"
+            _notion("validation", validation, "approved", period)
+
             print("\n[EXECUÇÃO] Executando ajustes aprovados...")
             execution_result = self.media.execute_approved_actions(
                 approved_plan=_extract_approved_actions(validation)
             )
             _print_section("RESULTADO DA EXECUÇÃO", execution_result)
+            _notion("execution", execution_result, "executed", period)
         else:
+            validation_status = "rejected"
+            _notion("validation", validation, "rejected", period)
             print("\n[EXECUÇÃO] Plano não aprovado para execução automática.")
             print("Revise as recomendações do Head de Marketing e submeta novo plano.")
 
@@ -100,7 +105,7 @@ class Orchestrator:
         }
 
     def run_agent(self, agent_name: str, **kwargs) -> str:
-        """Run a single agent by name. Useful for on-demand analysis."""
+        """Run a single agent by name with optional Notion publishing."""
         agents = {
             "environmental": lambda: self.environmental.analyze(**kwargs),
             "media": lambda: self.media.analyze(**kwargs),
@@ -113,7 +118,18 @@ class Orchestrator:
                 f"Agente '{agent_name}' não encontrado. "
                 f"Disponíveis: {list(agents.keys())}"
             )
-        return agents[agent_name]()
+        result = agents[agent_name]()
+        period = kwargs.get("period", None)
+        _notion(agent_name, result, "generated", period)
+        return result
+
+
+def _notion(report_type: str, content: str, status: str, period=None) -> None:
+    url = notion_send_report(report_type=report_type, content=content, status=status, period=period)
+    if url.startswith("http"):
+        print(f"  [Notion] Página criada: {url}")
+    elif "[Notion]" in url:
+        print(f"  {url}")
 
 
 def _print_section(title: str, content: str) -> None:
@@ -124,16 +140,11 @@ def _print_section(title: str, content: str) -> None:
 
 
 def _plan_approved(validation: str) -> bool:
-    """Heuristic: check if the validation text signals at least partial approval."""
     upper = validation.upper()
     return "APROVADO" in upper and "REPROVADO" not in upper.split("APROVADO")[0]
 
 
 def _extract_approved_actions(validation: str) -> str:
-    """
-    Return the approved actions section from the validation text.
-    Falls back to the full validation if the section isn't clearly delimited.
-    """
     markers = ["AÇÕES APROVADAS", "ACOES APROVADAS", "APROVADO"]
     for marker in markers:
         idx = validation.upper().find(marker)

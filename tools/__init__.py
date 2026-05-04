@@ -2,6 +2,7 @@ from .meta_ads_api import META_ADS_TOOLS, execute_meta_ads_tool
 from .ga4_api import GA4_TOOLS, execute_ga4_tool
 from .tray_api import TRAY_TOOLS, execute_tray_tool
 from .web_search import WEB_SEARCH_TOOLS, execute_web_search_tool
+from .notion_reporter import send_report as notion_send_report
 
 ALL_TOOLS = META_ADS_TOOLS + GA4_TOOLS + TRAY_TOOLS + WEB_SEARCH_TOOLS
 
