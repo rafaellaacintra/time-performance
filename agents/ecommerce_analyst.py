@@ -1,4 +1,4 @@
-import anthropic
+from openai import OpenAI
 from agents.base_agent import BaseAgent
 from tools import GA4_TOOLS, TRAY_TOOLS
 
@@ -64,7 +64,7 @@ PRINCÍPIOS
 
 
 class EcommerceAnalyst(BaseAgent):
-    def __init__(self, client: anthropic.Anthropic):
+    def __init__(self, client: OpenAI):
         super().__init__(
             client=client,
             name="Analista de E-commerce",

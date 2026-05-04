@@ -1,3 +1,8 @@
+from openai import OpenAI
+from config import OPENAI_API_KEY
+
+_SEARCH_MODEL = "gpt-4o-mini"
+
 WEB_SEARCH_TOOLS = [
     {
         "name": "web_search",
@@ -29,32 +34,46 @@ WEB_SEARCH_TOOLS = [
 
 
 def execute_web_search_tool(tool_name: str, tool_input: dict) -> str:
-    if tool_name == "web_search":
-        query = tool_input.get("query", "")
-        search_type = tool_input.get("search_type", "general")
-        return f"""
-RESULTADOS DA BUSCA — "{query}" (tipo: {search_type})
-══════════════════════════════════════════════════
+    if tool_name != "web_search":
+        return f"[ERRO] Ferramenta de busca '{tool_name}' não reconhecida."
 
-[STUB] Resultado 1 — Tendência de mercado
-  Sazonalidade alta identificada para o período: volume de buscas 38% acima da média.
-  Pico previsto para os próximos 7 dias. Concorrentes aumentando investimento em ~25%.
+    if not OPENAI_API_KEY:
+        return "[ERRO] OPENAI_API_KEY não configurada no .env"
 
-[STUB] Resultado 2 — Inteligência competitiva
-  Concorrente principal usando criativos de vídeo curto (15-30s) com CTR 2,3x maior
-  que estáticos. Estratégia de lance focada em horário nobre (19h-22h).
+    query = tool_input.get("query", "")
+    search_type = tool_input.get("search_type", "general")
 
-[STUB] Resultado 3 — Oportunidade de CPC
-  CPCs 15% abaixo da média nas manhãs de terça a quinta. Janela de eficiência
-  identificada para alocação orçamentária.
+    prompt = (
+        f"Você é um especialista em marketing digital e e-commerce brasileiro. "
+        f"Pesquise na web sobre: {query}\n\n"
+        f"Tipo de pesquisa: {search_type}\n\n"
+        f"Retorne um resumo estruturado com os achados mais relevantes, "
+        f"incluindo dados concretos, tendências identificadas e implicações práticas "
+        f"para campanhas de tráfego pago no Brasil."
+    )
 
-[STUB] Resultado 4 — Referência criativa
-  Formato "antes e depois" com prova social performando acima da média no setor.
-  UGC (conteúdo gerado por usuário) com taxa de engajamento 40% superior a produções.
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.responses.create(
+            model=_SEARCH_MODEL,
+            tools=[{"type": "web_search_preview"}],
+            input=prompt,
+        )
+        return _extract_text(response, query, search_type)
+    except Exception as exc:
+        return f"[ERRO na busca web] {exc}"
 
-[STUB] Resultado 5 — Benchmark do setor
-  ROAS médio do setor para tráfego pago: 3,5x a 5,0x. CPA médio: R$ 35-60.
-  Taxa de conversão de referência e-commerce: 1,8% a 3,2%.
-"""
 
-    return f"[ERRO] Ferramenta de busca '{tool_name}' não reconhecida."
+def _extract_text(response, query: str, search_type: str) -> str:
+    texts = []
+    for item in response.output:
+        if item.type == "message":
+            for content in item.content:
+                if content.type == "output_text":
+                    texts.append(content.text)
+
+    if not texts:
+        return f"[Busca] Nenhum resultado retornado para: {query}"
+
+    header = f'RESULTADOS DA BUSCA — "{query}" (tipo: {search_type})\n{"═" * 50}\n\n'
+    return header + "\n\n".join(texts)

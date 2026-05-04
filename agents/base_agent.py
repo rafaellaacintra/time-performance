@@ -1,89 +1,92 @@
+import json
 from typing import Optional
-import anthropic
+from openai import OpenAI
 from config import MODEL, MAX_TOKENS, MAX_TOOL_ITERATIONS
 from tools import execute_tool
 
 
+def _to_openai_tools(anthropic_tools: list) -> list:
+    """Convert Anthropic tool schema format to OpenAI function calling format."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        }
+        for t in anthropic_tools
+    ]
+
+
 class BaseAgent:
-    """
-    Base class for all agents. Handles the tool-use loop and prompt caching.
-
-    The system prompt is cached with cache_control "ephemeral" to avoid
-    re-sending large prompts on every turn. Each agent subclass defines
-    its own system_prompt and tools list.
-    """
-
-    def __init__(
-        self,
-        client: anthropic.Anthropic,
-        name: str,
-        system_prompt: str,
-        tools: list,
-    ):
+    def __init__(self, client: OpenAI, name: str, system_prompt: str, tools: list):
         self.client = client
         self.name = name
         self.system_prompt = system_prompt
         self.tools = tools
+        self._oai_tools = _to_openai_tools(tools) if tools else []
 
     def run(self, user_message: str, context: Optional[str] = None) -> str:
-        """
-        Run the agent on a user message, optionally with additional context
-        (e.g., metrics already fetched, reports from other agents).
-
-        Executes the tool-use loop until Claude returns end_turn or the
-        iteration limit is reached.
-        """
         if context:
             full_message = f"{user_message}\n\nContexto adicional disponível:\n{context}"
         else:
             full_message = user_message
 
-        messages = [{"role": "user", "content": full_message}]
-        last_response = None
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": full_message},
+        ]
+        last_content = ""
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            create_kwargs: dict = {
+            kwargs: dict = {
                 "model": MODEL,
                 "max_tokens": MAX_TOKENS,
-                "system": [
-                    {
-                        "type": "text",
-                        "text": self.system_prompt,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
                 "messages": messages,
             }
-            if self.tools:
-                create_kwargs["tools"] = self.tools
+            if self._oai_tools:
+                kwargs["tools"] = self._oai_tools
 
-            last_response = self.client.messages.create(**create_kwargs)
+            response = self.client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            message = choice.message
+            last_content = message.content or ""
 
-            if last_response.stop_reason == "end_turn":
-                return self._extract_text(last_response)
+            if choice.finish_reason == "stop":
+                return last_content
 
-            if last_response.stop_reason == "tool_use":
-                messages.append({"role": "assistant", "content": last_response.content})
-                tool_results = []
-                for block in last_response.content:
-                    if block.type == "tool_use":
-                        result = execute_tool(block.name, block.input)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result,
-                            }
-                        )
-                messages.append({"role": "user", "content": tool_results})
+            if choice.finish_reason == "tool_calls" and message.tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in message.tool_calls
+                    ],
+                })
+
+                for tc in message.tool_calls:
+                    try:
+                        tool_input = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        tool_input = {}
+                    result = execute_tool(tc.function.name, tool_input)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
                 continue
 
-            # pause_turn or unexpected stop reason — append and continue
-            messages.append({"role": "assistant", "content": last_response.content})
+            return last_content
 
-        return self._extract_text(last_response) if last_response else ""
-
-    def _extract_text(self, response: anthropic.types.Message) -> str:
-        return "\n".join(
-            block.text for block in response.content if block.type == "text"
-        )
+        return last_content

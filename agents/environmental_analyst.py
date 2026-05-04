@@ -1,4 +1,4 @@
-import anthropic
+from openai import OpenAI
 from agents.base_agent import BaseAgent
 from tools import WEB_SEARCH_TOOLS
 
@@ -52,7 +52,7 @@ PRINCÍPIOS DE TRABALHO
 
 
 class EnvironmentalAnalyst(BaseAgent):
-    def __init__(self, client: anthropic.Anthropic):
+    def __init__(self, client: OpenAI):
         super().__init__(
             client=client,
             name="Analista Ambiental de Marketing",

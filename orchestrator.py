@@ -1,4 +1,5 @@
-import anthropic
+from openai import OpenAI
+from config import OPENAI_API_KEY
 from agents import (
     EnvironmentalAnalyst,
     MediaAnalyst,
@@ -25,13 +26,13 @@ class Orchestrator:
     """
 
     def __init__(self):
-        self.client = anthropic.Anthropic()
-        self.environmental = EnvironmentalAnalyst(self.client)
-        self.media = MediaAnalyst(self.client)
-        self.creative = CreativeAnalyst(self.client)
-        self.revops = RevOpsAnalyst(self.client)
-        self.head = MarketingHead(self.client)
-        self.ecommerce = EcommerceAnalyst(self.client)
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        self.environmental = EnvironmentalAnalyst(client)
+        self.media = MediaAnalyst(client)
+        self.creative = CreativeAnalyst(client)
+        self.revops = RevOpsAnalyst(client)
+        self.head = MarketingHead(client)
+        self.ecommerce = EcommerceAnalyst(client)
 
     def daily_report(self, category: str = "", period: str = "morning") -> dict:
         """Run the full daily performance workflow."""
@@ -75,9 +76,7 @@ class Orchestrator:
 
         execution_result = ""
         if _plan_approved(validation):
-            validation_status = "approved"
             _notion("validation", validation, "approved", period)
-
             print("\n[EXECUÇÃO] Executando ajustes aprovados...")
             execution_result = self.media.execute_approved_actions(
                 approved_plan=_extract_approved_actions(validation)
@@ -85,7 +84,6 @@ class Orchestrator:
             _print_section("RESULTADO DA EXECUÇÃO", execution_result)
             _notion("execution", execution_result, "executed", period)
         else:
-            validation_status = "rejected"
             _notion("validation", validation, "rejected", period)
             print("\n[EXECUÇÃO] Plano não aprovado para execução automática.")
             print("Revise as recomendações do Head de Marketing e submeta novo plano.")
